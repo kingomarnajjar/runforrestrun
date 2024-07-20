@@ -22,6 +22,19 @@
       bottom: 0;
       width: 100%;
     }
+    #header {
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 1000;
+    }
+    #header img {
+      width: 100px;
+      height: 100px;
+      border-radius: 50%;
+      object-fit: cover;
+    }
     #controls {
       position: absolute;
       top: 10px;
@@ -30,11 +43,37 @@
       padding: 16px;
       border-radius: 8px;
       box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+      z-index: 1000;
+      max-height: 80%;
+      overflow-y: auto;
+    }
+    #controls.collapsed {
+      display: none;
+    }
+    #toggle-controls {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: white;
+      padding: 8px;
+      border-radius: 50%;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+      z-index: 1000;
+    }
+    @media (max-width: 768px) {
+      #controls {
+        width: 80%;
+        left: 50%;
+        transform: translateX(-50%);
+      }
     }
   </style>
 </head>
 <body class="bg-gray-100">
   <div id="map"></div>
+  <div id="header">
+    <img src="https://external-content.duckduckgo.com/iu/?u=http%3A%2F%2Fwww.cajagranadafundacion.es%2Fwp-content%2Fuploads%2F2017%2F06%2Feventoa-forrest-gump.jpg&f=1&nofb=1&ipt=07c1b21934bbb58f00a8d5c7ac71c72d2a737c2b37857ffddfd3e7686ecebdd7&ipo=images" alt="Forrest Gump">
+  </div>
   <div id="controls" class="space-y-4">
     <label class="block">
       <span class="text-gray-700">Use Current Location:</span>
@@ -64,6 +103,7 @@
     <button id="open-google-maps" class="w-full bg-green-500 text-white py-2 px-4 rounded-md hover:bg-green-700 transition duration-300">Open in Google Maps</button>
     <button id="open-apple-maps" class="w-full bg-red-500 text-white py-2 px-4 rounded-md hover:bg-red-700 transition duration-300">Open in Apple Maps</button>
   </div>
+  <button id="toggle-controls" class="bg-gray-800 text-white">&equiv;</button>
   <script>
     mapboxgl.accessToken = 'pk.eyJ1IjoiamVubnlmcm9tdGhhYmxvY2siLCJhIjoiY2x5dWQwa3dwMTI1aTJscHVtOHR1ZmUxdyJ9.NZSYIPeI4A96tF6sWSIRvQ';
 
@@ -84,8 +124,6 @@
     });
 
     document.getElementById('generate-route').addEventListener('click', async () => {
-      console.log('Generate route button clicked');
-
       const useCurrentLocation = document.getElementById('use-current-location').checked;
       if (!useCurrentLocation) {
         const startPointInput = document.getElementById('starting-point').value;
@@ -101,8 +139,6 @@
       const roundTrip = document.getElementById('round-trip').checked;
       const hills = document.getElementById('hills').checked;
       const stores = document.getElementById('stores').checked;
-
-      console.log(`Starting Point: ${startPoint}, Distance: ${distance} meters, Round Trip: ${roundTrip}, Hills: ${hills}, Stores: ${stores}`);
 
       if (!map) {
         map = new mapboxgl.Map({
@@ -146,39 +182,43 @@
         const dy = Math.sin(angle) * (roundTrip ? distance / 2 : distance);
         const waypoint = [startPoint[0] + dx / (111320 * Math.cos(startPoint[1] * Math.PI / 180)), startPoint[1] + dy / 110540];
 
-        if (stores) {
-          const store = await findNearestStore(startPoint);
-          if (store) {
-            directions.setOrigin(startPoint);
-            directions.addWaypoint(0, store.center);
-            directions.setDestination(roundTrip ? startPoint : waypoint);
-            destinationPoint = store.center;
+        try {
+          if (stores) {
+            const store = await findNearestStore(startPoint);
+            if (store) {
+              destinationPoint = store.center;
+              console.log(`Nearest store found at: ${destinationPoint}`);
+            } else {
+              destinationPoint = waypoint;
+              console.log(`No store found, using random waypoint: ${destinationPoint}`);
+            }
           } else {
-            alert("No convenience stores found nearby.");
-            return;
+            destinationPoint = waypoint;
           }
-        } else {
+
           directions.setOrigin(startPoint);
-          directions.setDestination(roundTrip ? startPoint : waypoint);
-          destinationPoint = roundTrip ? startPoint : waypoint;
-        }
+          directions.setDestination(destinationPoint);
 
-        const route = await new Promise((resolve) => {
-          directions.on('route', (e) => {
-            resolve(e.route[0]);
+          const route = await new Promise((resolve, reject) => {
+            directions.on('route', (e) => {
+              if (e.route.length > 0) {
+                resolve(e.route[0]);
+              } else {
+                reject(new Error('No route found'));
+              }
+            });
           });
-        });
 
-        if (route.distance >= distance * 0.8 && route.distance <= distance * 1.2) {
-          routeFound = true;
-          if (hills) {
-            map.setLayoutProperty('hillshading', 'visibility', 'visible');
+          if (route.distance >= distance * 0.8 && route.distance <= distance * 1.2) {
+            routeFound = true;
+            drawRoute(route);
+            console.log(`Route distance: ${route.distance} meters`);
           } else {
-            map.setLayoutProperty('hillshading', 'visibility', 'none');
+            console.log("Route distance does not meet the requirement. Adjusting...");
+            attempts++;
           }
-          console.log(`Route distance: ${route.distance} meters`);
-        } else {
-          console.log("Route distance does not meet the requirement. Adjusting...");
+        } catch (error) {
+          console.log("Error finding route: ", error);
           attempts++;
         }
       }
@@ -188,10 +228,47 @@
       }
     });
 
+    function drawRoute(route) {
+      const coordinates = route.geometry.coordinates;
+      if (map.getLayer('route')) {
+        map.getSource('route').setData({
+          'type': 'Feature',
+          'geometry': {
+            'type': 'LineString',
+            'coordinates': coordinates
+          }
+        });
+      } else {
+        map.addLayer({
+          'id': 'route',
+          'type': 'line',
+          'source': {
+            'type': 'geojson',
+            'data': {
+              'type': 'Feature',
+              'geometry': {
+                'type': 'LineString',
+                'coordinates': coordinates
+              }
+            }
+          },
+          'layout': {
+            'line-join': 'round',
+            'line-cap': 'round'
+          },
+          'paint': {
+            'line-color': '#3887be',
+            'line-width': 5,
+            'line-opacity': 0.75
+          }
+        });
+      }
+    }
+
     async function findNearestStore(startPoint) {
-      const response = await fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/convenience%20store.json?proximity=${startPoint[0]},${startPoint[1]}&limit=1&access_token=${mapboxgl.accessToken}`);
+      const response = await fetch(`https://api.mapbox.com/geocoding/v5/mapbox.places/convenience%20store.json?proximity=${startPoint[0]},${startPoint[1]}&access_token=${mapboxgl.accessToken}`);
       const data = await response.json();
-      return data.features.length ? data.features[0] : null;
+      return data.features[0];
     }
 
     document.getElementById('open-google-maps').addEventListener('click', () => {
@@ -210,6 +287,15 @@
       }
       const appleMapsUrl = `http://maps.apple.com/?saddr=${startPoint[1]},${startPoint[0]}&daddr=${destinationPoint[1]},${destinationPoint[0]}&dirflg=w`;
       window.open(appleMapsUrl, '_blank');
+    });
+
+    document.getElementById('toggle-controls').addEventListener('click', () => {
+      const controls = document.getElementById('controls');
+      if (controls.classList.contains('collapsed')) {
+        controls.classList.remove('collapsed');
+      } else {
+        controls.classList.add('collapsed');
+      }
     });
   </script>
 </body>

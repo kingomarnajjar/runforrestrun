@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Runner Map</title>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+  <link href="https://api.mapbox.com/mapbox-gl-js/v2.6.1/mapbox-gl.css" rel="stylesheet">
+  <link href="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-directions/v4.3.1/mapbox-gl-directions.css" rel="stylesheet">
+  <script src="https://api.mapbox.com/mapbox-gl-js/v2.6.1/mapbox-gl.js"></script>
+  <script src="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-directions/v4.3.1/mapbox-gl-directions.js"></script>
+  <style>
+    body, html {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+    }
+    #map {
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      width: 100%;
+    }
+    #controls {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      background: white;
+      padding: 16px;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+  </style>
+</head>
+<body class="bg-gray-100">
+  <div id="map"></div>
+  <div id="controls" class="space-y-4">
+    <label class="block">
+      <span class="text-gray-700">Use Current Location:</span>
+      <input type="checkbox" id="use-current-location" class="mt-1">
+    </label>
+    <label class="block">
+      <span class="text-gray-700">Starting Point (latitude, longitude):</span>
+      <input type="text" id="starting-point" placeholder="e.g., 37.7749,-122.4194" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50" disabled>
+    </label>
+    <label class="block">
+      <span class="text-gray-700">Distance (km):</span>
+      <input type="number" id="distance" value="5" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50">
+    </label>
+    <label class="block">
+      <span class="text-gray-700">Round Trip:</span>
+      <input type="checkbox" id="round-trip" class="mt-1">
+    </label>
+    <label class="block">
+      <span class="text-gray-700">Hills:</span>
+      <input type="checkbox" id="hills" class="mt-1">
+    </label>
+    <label class="block">
+      <span class="text-gray-700">Convenience Stores:</span>
+      <input type="checkbox" id="stores" class="mt-1">
+    </label>
+    <button id="generate-route" class="w-full bg-blue-500 text-white py-2 px-4 rounded-md hover:bg-blue-700 transition duration-300">Generate Route</button>
+    <button id="open-google-maps" class="w-full bg-green-500 text-white py-2 px-4 rounded-md hover:bg-green-700 transition duration-300">Open in Google Maps</button>
+    <button id="open-apple-maps" class="w-full bg-red-500 text-white py-2 px-4 rounded-md hover:bg-red-700 transition duration-300">Open in Apple Maps</button>
+  </div>
+  <script>
+    mapboxgl.accessToken = 'pk.eyJ1IjoiamVubnlmcm9tdGhhYmxvY2siLCJhIjoiY2x5dWQwa3dwMTI1aTJscHVtOHR1ZmUxdyJ9.NZSYIPeI4A96tF6sWSIRvQ';
+
+    let startPoint = [];
+    let map;
+    let directions;
+
+    document.getElementById('use-current-location').addEventListener('change', (event) => {
+      const useCurrentLocation = event.target.checked;
+      document.getElementById('starting-point').disabled = useCurrentLocation;
+      if (useCurrentLocation) {
+        navigator.geolocation.getCurrentPosition((position) => {
+          const { latitude, longitude } = position.coords;
+          startPoint = [longitude, latitude];
+        });
+      }
+    });
+
+    document.getElementById('generate-route').addEventListener('click', async () => {
+      console.log('Generate route button clicked');
+
+      const useCurrentLocation = document.getElementById('use-current-location').checked;
+      if (!useCurrentLocation) {
+        const startPointInput = document.getElementById('starting-point').value;
+        if (startPointInput) {
+          startPoint = startPointInput.split(',').map(Number);
+        } else {
+          alert("Please enter a valid starting point.");
+          return;
+        }
+      }
+
+      const distance = document.getElementById('distance').value * 1000; // Convert to meters
+      const roundTrip = document.getElementById('round-trip').checked;
+      const hills = document.getElementById('hills').checked;
+      const stores = document.getElementById('stores').checked;
+
+      console.log(`Starting Point: ${startPoint}, Distance: ${distance} meters, Round Trip: ${roundTrip}, Hills: ${hills}, Stores: ${stores}`);
+
+      map = new mapboxgl.Map({
+        container: 'map',
+        style: 'mapbox://styles/mapbox/outdoors-v11',
+        center: startPoint,
+        zoom: 14
+      });
+
+      map.on('load', async () => {
+        map.addLayer({
+          'id': 'hillshading',
+          'source': {
+            'type': 'raster-dem',
+            'url': 'mapbox://mapbox.terrain-rgb'
+          },
+          'type': 'hillshade'
+        });
+
+        new mapboxgl.Marker()
+          .setLngLat(startPoint)
+          .addTo(map);
+
+        directions = new MapboxDirections({
+          accessToken: mapboxgl.accessToken,
+          unit: 'metric',
+          profile: 'mapbox/walking'
+        });
+
+        map.addControl(directions, 'top-left');
+
+        let routeFound = false;
+        let attempts = 0;
+        const maxAttempts = 10;
+
+        while (!routeFound && attempts < maxAttempts) {
+          const angle = Math.random() * Math.PI * 2;
+          const dx = Math.cos(angle) * (roundTrip ? distance / 2 : distance);
+          const dy = Math.sin(angle) * (roundTrip ? distance / 2 : distance);
+          const waypoint = [startPoint[0] + dx / (111320 * Math.cos(startPoint[1] * Math.PI / 180)), startPoint[1] + dy / 110540];
+
+          directions.setOrigin(startPoint);
+          directions.setDestination(roundTrip ? startPoint : waypoint);
+
+          const route = await new Promise((resolve) => {
+            directions.on('route', (e) => {
+              resolve(e.route[0]);
+            });
+          });
+
+          if (route.distance >= distance * 0.8 && route.distance <= distance * 1.2) {
+            routeFound = true;
+            if (hills) {
+              map.setLayoutProperty('hillshading', 'visibility', 'visible');
+            } else {
+              map.setLayoutProperty('hillshading', 'visibility', 'none');
+            }
+            console.log(`Route distance: ${route.distance} meters`);
+          } else {
+            console.log("Route distance does not meet the requirement. Adjusting...");
+            attempts++;
+          }
+        }
+
+        if (!routeFound) {
+          alert("Unable to find a suitable route. Please try again.");
+        }
+      });
+    });
+
+    document.getElementById('open-google-maps').addEventListener('click', () => {
+      const googleMapsUrl = `https://www.google.com/maps/dir/?api=1&origin=${startPoint[1]},${startPoint[0]}&destination=${startPoint[1]},${startPoint[0]}&travelmode=walking`;
+      window.open(googleMapsUrl, '_blank');
+    });
+
+    document.getElementById('open-apple-maps').addEventListener('click', () => {
+      const appleMapsUrl = `http://maps.apple.com/?saddr=${startPoint[1]},${startPoint[0]}&daddr=${startPoint[1]},${startPoint[0]}&dirflg=w`;
+      window.open(appleMapsUrl, '_blank');
+    });
+  </script>
+</body>
+</html>
